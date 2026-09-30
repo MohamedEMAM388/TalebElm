@@ -21,7 +21,7 @@ public class ExamService(IUnitOfWork unitOfWork) : IExamService
         if (exam is null)
             throw new NotFoundException($"Exam With Id {id} Not found");
         
-        // happy scenario 
+     
         return new ExamResponse(
             exam.Id,
             exam.Title,
