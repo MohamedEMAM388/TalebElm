@@ -2,7 +2,7 @@ using Microsoft.EntityFrameworkCore;
 using TalebElm.Domain.Entities;
 using TalebElm.Infrastructure.Persistence.Repositories;
 using TalebElm.Tests.Infrastructure;
-using Xunit;
+
 
 namespace TalebElm.Tests.UnitTests;
 
