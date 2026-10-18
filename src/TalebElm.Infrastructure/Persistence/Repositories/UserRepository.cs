@@ -11,7 +11,7 @@ public class UserRepository(AppDbContext context) : IUserRepository
         => await context.Users.FirstOrDefaultAsync(u => u.Id == id);
 
 public async Task<IReadOnlyList<User>> GetAllAsync()
-    => await context.Users.AsNoTracking().ToListAsync();
+    => await context.Users.ToListAsync();
 
     public async Task AddAsync(User entity)
         => await context.Users.AddAsync(entity);
