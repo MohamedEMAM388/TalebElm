@@ -58,7 +58,17 @@ public class UserRepositoryTests : SqliteTestBase
             ["a@test.com", "b@test.com", "c@test.com"],
             result.Select(u => u.Email).OrderBy(e => e));
     }
+    [Fact]
+    public async Task GetAllAsync_DoesNotTrackEntities()
+    {
+        await _repository.AddAsync(NewUser("a"));
+        await SaveChangesAsync();
+        ClearTracker();
 
+        await _repository.GetAllAsync();
+
+        Assert.Empty(DbContext.ChangeTracker.Entries<User>());
+    }
     [Fact]
     public async Task AddAsync_DoesNotPersist_UntilSave()
     {
