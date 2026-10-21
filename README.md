@@ -8,7 +8,7 @@
 
 **TalebElm** is a scalable, enterprise-grade backend platform for structured learning delivery — tracks, modules, lessons, exams, and learner progression — built on **ASP.NET Core** with **Clean Architecture**, **Entity Framework Core**, and automated DevOps quality gates.
 
-The platform exposes a versioned HTTP API backed by a strictly layered domain model, explicit persistence boundaries, and a comprehensive automated test suite. It is designed for extensibility across content domains, Field-level data integrity, and safe evolution of business rules independent of infrastructure concerns.
+The platform exposes a JSON HTTP API backed by a strictly layered domain model, explicit persistence boundaries, and a comprehensive automated test suite. It is designed for extensibility across content domains, field-level data integrity, and safe evolution of business rules independent of infrastructure concerns.
 
 ---
 
@@ -36,11 +36,11 @@ The platform exposes a versioned HTTP API backed by a strictly layered domain mo
 | Capability | Description |
 | --- | --- |
 | **Content hierarchy** | Ordered `Track → Module → Lesson` content model with sequencing constraints and restricted delete semantics |
-| **Assessment engine** | Module-level exams with server-side grading contracts and pass-threshold progression rules |
-| **Learner progression** | Per-learner, per-module progress tracking (`UNIQUE(UserId, ModuleId)`) with forward-only unlock semantics |
-| **Identity foundation** | User profiles with role-based contracts (`Admin`, learner roles) and unique identity indexes |
+| **Assessment engine** | Module-level exam model and read contract; question storage and server-side grading are planned |
+| **Learner progression** | Per-learner, per-module progress persistence (`UNIQUE(UserId, ModuleId)`) with documented forward-only unlock rules; the submit/unlock workflow is planned |
+| **Identity foundation** | User profiles with `Student`/`Instructor`/`Admin` roles (`Student` default), password hashing, and unique identity indexes |
 | **Operational health** | Health-check endpoint and centralized domain-exception → HTTP status mapping |
-| **Extensibility** | Planned contracts for enrollment (`TrackEnrollment`), lesson resources (`LessonResource`), and question banks (`ExamQuestion`/`ExamOption`) — see `docs/FEATURE_INDEX.md` |
+| **Extensibility** | Persistence contracts for enrollment (`TrackEnrollment`) and lesson resources (`LessonResource`); their workflows and endpoints are planned, as are question banks (`ExamQuestion`/`ExamOption`) — see `docs/FEATURE_INDEX.md` |
 
 > Implementation maturity per capability is tracked explicitly in [`docs/FEATURE_INDEX.md`](docs/FEATURE_INDEX.md). A controller or entity class documents a contract; it does not imply the full workflow is wired end to end.
 
@@ -122,13 +122,14 @@ Full route matrix, status codes, and implemented-vs-planned markings: [`docs/API
 
 - Single `AppDbContext` with per-entity `IEntityTypeConfiguration<T>` classes under `Infrastructure/Persistence/Configurations/`.
 - SQLite for local development via `ConnectionStrings:TalebElm` (`Data Source=talebelm.db` in `appsettings.Development.json`).
-- Baseline EF Core migration committed under `Infrastructure/Migrations/` with design-time `AppDbContextFactory`.
+- EF Core migration chain committed under `Infrastructure/Migrations/` with a design-time `AppDbContextFactory`.
 - Enforced relational constraints:
   - `UNIQUE(UserId, ModuleId)` on `UserProgress`
+  - `UNIQUE(UserId, TrackId)` on `TrackEnrollment`
   - `UNIQUE(TrackId, Order)` on `Module`
   - `UNIQUE(ModuleId, Order)` on `Lesson`
   - `UNIQUE(ModuleId)` on `Exam` (at most one exam per module)
-  - `DeleteBehavior.Restrict` on all learning-path foreign keys — blocked deletes surface as `409 Conflict`; learner data is never cascade-deleted.
+  - `DeleteBehavior.Restrict` on all learning-path foreign keys; learner data is never cascade-deleted. Translating dependent-delete failures into API `409 Conflict` responses is target work.
 - `IUnitOfWork.SaveChangesAsync()` is the single commit point. Application services depend exclusively on `IUnitOfWork`; direct `DbContext` abstractions in Application are not permitted.
 
 See [`docs/DATABASE_ERD.md`](docs/DATABASE_ERD.md) for the entity-relationship model.
@@ -225,10 +226,10 @@ Full reference: [`docs/LOCAL_SETUP.md`](docs/LOCAL_SETUP.md).
 
 ```bash
 # Create a migration
-dotnet ef migrations add <MigrationName> --project src/TalebElm.Infrastructure --startup-project src/TalebElm.Api
+dotnet ef migrations add <MigrationName> --project src/TalebElm.Infrastructure --startup-project src/TalebElm.Infrastructure
 
 # Apply migrations to the configured database
-dotnet ef database update --project src/TalebElm.Infrastructure --startup-project src/TalebElm.Api
+dotnet ef database update --project src/TalebElm.Infrastructure --startup-project src/TalebElm.Infrastructure
 ```
 
 ---

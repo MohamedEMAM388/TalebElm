@@ -7,13 +7,13 @@ This page separates routes currently declared in `TalebElm.Api` from the routes 
 | HTTP | Route | Current behavior |
 |---|---|---|
 | GET | `/api/health` | Returns `200 OK` with `healthy`. |
-| POST | `/api/auth/login` | Declared, no request/response DTO, throws `System.NotImplementedException`. |
-| GET | `/api/users` | Declared, action has no parameters and throws `System.NotImplementedException`. |
-| POST | `/api/users` | Declared, action has no request parameter and throws `System.NotImplementedException`. |
-| GET | `/api/tracks` | Declared, no service is wired to the controller; throws `System.NotImplementedException`. |
-| POST | `/api/tracks` | Declared, action has no request parameter; throws `System.NotImplementedException`. |
-| GET | `/api/modules` | Declared as a parameterless placeholder; throws `System.NotImplementedException`. |
-| GET | `/api/lessons` | Declared as a parameterless placeholder; throws `System.NotImplementedException`. |
+| POST | `/api/auth/login` | Declared, no request/response DTO, throws domain `NotImplementedException`. |
+| GET | `/api/users` | Declared, action has no parameters and throws domain `NotImplementedException`. |
+| POST | `/api/users` | Declared, action has no request parameter and throws domain `NotImplementedException`. |
+| GET | `/api/tracks` | `TrackService` list exists, but is not wired to the controller; throws domain `NotImplementedException`. |
+| POST | `/api/tracks` | `TrackService` create exists, but the action has no request parameter and is not wired; throws domain `NotImplementedException`. |
+| GET | `/api/modules` | `ModuleService` read exists; controller is still a parameterless placeholder. |
+| GET | `/api/lessons` | `LessonService` reads exist; controller is still a parameterless placeholder. |
 | GET | `/api/exams/{id}` | Declared as a placeholder; throws domain `NotImplementedException`. |
 | POST | `/api/exams` | Declared as a parameterless placeholder; throws domain `NotImplementedException`. |
 | POST | `/api/exams/{id}/submit` | Declared as a placeholder; throws domain `NotImplementedException`. |
@@ -32,9 +32,9 @@ There is no registration endpoint, enrollment endpoint, nested lesson route, or 
 | POST | `/api/auth/login` | Login request | Token response | 200, 400, 401 |
 | GET | `/api/tracks` | None | Published Track summaries | 200 |
 | GET | `/api/tracks/{trackId}` | None | Track detail with ordered Modules | 200, 404 |
-| POST | `/api/tracks/{trackId}/enrollment` | None; learner comes from auth | Enrollment response | 201, 401, 404, 409 |
+| POST | `/api/tracks/{trackId}/enrollment` | None; Student comes from auth | Enrollment response | 201, 401, 404, 409 |
 
-`User` currently has no password, role, or enrollment relationship. The registration/auth contract must be decided before these routes are implemented. `TrackEnrollment` is proposed separately from `UserProgress`.
+`User` now has `PasswordHash`, `Role` (`UserRole`: `Student`/`Instructor`/`Admin`), and a `TrackEnrollments` collection; password hashing is implemented. Registration, login, token issuance, and authorization policies are still not implemented. `TrackEnrollment` persistence exists separately from `UserProgress`; the enrollment endpoint is not wired.
 
 ### Lessons and learning sources
 
@@ -43,37 +43,37 @@ There is no registration endpoint, enrollment endpoint, nested lesson route, or 
 | GET | `/api/modules/{moduleId}/lessons` | None | Ordered Lesson summaries | 200, 403, 404 |
 | GET | `/api/lessons/{lessonId}` | None | Lesson detail and ordered source links | 200, 403, 404 |
 
-`Lesson` currently stores `Content`, `Order`, and `ModuleId`. Books, official documentation, videos, and other source links need a proposed `LessonResource` contract; there is no resource entity or service today.
+`Lesson` stores `Content`, `Order`, and `ModuleId`. `LessonResource` (title, kind, URL/citation, order) now exists in Domain/Infrastructure with a repository and migration; the lesson detail service loads them. Lesson HTTP endpoints remain placeholders.
 
 ### Exams and progression
 
 | HTTP | Route | Request | Response | Target status |
 |---|---|---|---|---|
-| GET | `/api/exams/{examId}` | None | Exam with learner-safe question/option DTOs | 200, 403, 404 |
-| POST | `/api/exams/{examId}/submit` | Selected question/option IDs; learner from auth | Exam result and pass state | 200, 400, 401, 403, 404 |
-| GET | `/api/progress/me` | None | Progress summaries for authenticated learner | 200, 401 |
+| GET | `/api/exams/{examId}` | None | Exam with Student-safe question/option DTOs | 200, 403, 404 |
+| POST | `/api/exams/{examId}/submit` | Selected question/option IDs; Student from auth | Exam result and pass state | 200, 400, 401, 403, 404 |
+| GET | `/api/progress/me` | None | Progress summaries for authenticated Student | 200, 401 |
 | GET | `/api/progress/me/tracks/{trackId}` | None | Ordered progress for one Track | 200, 401, 404 |
 
 The current `SubmitExamRequest` accepts a client-supplied score. Do not use that value for trusted grading. The target request must submit answers so the server can compare them with a server-side answer key, calculate the score, record `UserProgress`, and unlock only the next Module on a pass.
 
 ### Who may call (proposed)
 
-No roles exist in code yet. The MVP needs two: **Learner** (default after registration) and **Admin** (content author).
+The role model uses `UserRole` (`Student = 1`, `Instructor = 2`, `Admin = 3`). `Student` (the learner, default after registration) and `Admin` (content author/operator) are active in the MVP; `Instructor` is defined but reserved. "Learner" is an aggregate product term, not a stored role — see [`business/BUSINESS_RULES.md`](business/BUSINESS_RULES.md#role-taxonomy-decision-d-1).
 
 | Access | Routes |
 |---|---|
 | Anonymous | `GET /api/health`, `POST /api/auth/register`, `POST /api/auth/login` |
-| Learner (authenticated) | `GET /api/tracks`, `GET /api/tracks/{trackId}`, `POST /api/tracks/{trackId}/enrollment`, lesson reads, `GET /api/exams/{examId}`, `POST /api/exams/{examId}/submit`, `/api/progress/me*` |
+| Student (authenticated) | `GET /api/tracks`, `GET /api/tracks/{trackId}`, `POST /api/tracks/{trackId}/enrollment`, lesson reads, `GET /api/exams/{examId}`, `POST /api/exams/{examId}/submit`, `/api/progress/me*` |
 | Admin | `POST/PUT/DELETE` on Tracks, Modules, Lessons, and Exams, and `GET /api/users` |
 
-Learner-facing reads should also return a Track's Modules and Lessons only to an enrolled learner once the unlock rule is implemented: a locked Module's Lessons and Exam must not be served. When an authenticated learner requests a Lesson or Exam (including exam submission) that belongs to a Module the learner has not unlocked, the API must return `403 Forbidden` — not `404` — because the resource exists but the learner is not allowed to access it yet.
+Student-facing reads should also return a Track's Modules and Lessons only to an enrolled Student once the unlock rule is implemented: a locked Module's Lessons and Exam must not be served. When an authenticated Student requests a Lesson or Exam (including exam submission) that belongs to a Module the Student has not unlocked, the API must return `403 Forbidden` — not `404` — because the resource exists but the Student is not allowed to access it yet.
 
 ## 3. Validation and Response Rules
 
 - Use GUID route identifiers and JSON DTOs.
 - Return 400 for invalid input, 401 for missing/invalid authentication, 403 for forbidden actions, 404 for unknown resources, and 409 for duplicate enrollment or exam-per-module conflicts.
 - Keep controllers thin: bind HTTP input, call an Application service interface, and translate the result to HTTP. Do not put repository or progression logic in controllers.
-- Map `NotFoundException` to 404 and `ValidationException` to 400 after exception middleware is implemented, with a field-keyed `errors` object so clients can show per-field messages (see [08](features/08-health-and-error-handling.md)). The current middleware is empty and is not registered.
+- `ExceptionHandlingMiddleware` is registered and maps `NotFoundException` to 404 and FluentValidation failures to 400 as a problem+json `detail` string. A field-keyed `errors` object is target work (#321), as is translating dependent-delete/constraint failures to 409 instead of 500 (#322). See [08](features/08-health-and-error-handling.md).
 - Do not document a planned route as implemented until its controller, service wiring, and behavior tests are present.
 
 ## 4. Out of Scope for the Core Learning Flow
