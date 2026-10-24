@@ -15,9 +15,14 @@
 | Module | `Module` | One ordered section of a Track. Position is `Order` (≥ 1). |
 | Lesson | `Lesson` | One ordered study unit inside a Module. Position is `Order` (≥ 1). |
 | Exam | `Exam` | The assessment of a Module. At most one per Module; a Module may have none. |
-| Progress | `UserProgress` | One learner's state for one Module. Exactly one row per (`UserId`, `ModuleId`). |
+| Progress | `UserProgress` | One learner's state for one Module. Exactly one row per (`UserId`, `ModuleId`). Tracks both exam pass and problem completion flags. |
 | Enrollment | `TrackEnrollment` | A learner's explicit choice of a Track. Persisted separately from per-Module progress; the workflow is target behavior. |
-| Resource | `LessonResource` | A cited source for a Lesson (book, documentation, video, article, repository, or other). Persisted separately from lesson text. |
+| Resource | `LessonResource` / `Resource` | A cited source for a Lesson or a public Resource Hub topic. Persisted separately from lesson text; unifying under shared `Resource` is Decided (MVP) (Decision 25). |
+| Technology | `Technology` | Hierarchical node in the public Resource Hub tree (Language, Framework, Topic, Tool). Target behavior. |
+| External Account | `UserExternalAccount` | Learner profile on an external problem platform (Codeforces, GitHub) with verification challenge state. Target behavior. |
+| Module Problem | `ModuleProblem` | An assigned practice problem (Codeforces) or practical task (GitHub) attached to a Module. Target behavior. |
+| Problem Completion | `UserProblemCompletion` | Record of verified solve on an external platform or reviewed framework task. Target behavior. |
+| Capstone Project | `CapstoneProject` | Comprehensive portfolio project or progressive track milestone deliverables. Target/Proposed behavior. |
 
 All entities inherit `BaseEntity`: `Id` (auto-generated `Guid`, never reused, never reassigned) and `CreatedAt` (server UTC at insert, immutable afterwards).
 
@@ -54,10 +59,10 @@ Boundary notes: empty string passes `NOT NULL` in SQLite — hence the `CK_Users
 | C-1 | A Track is created as `Draft` (`TrackStatus.Draft = 0`, the CLR default) and is invisible to learners until explicitly `Published`. Shipped Tracks are `Archived`, never deleted. | Implemented (entity + default) |
 | C-2 | Only `Published` Tracks are browsable and enrollable. Learner reads filter by status; admin reads are unfiltered. | Target (services/API) |
 | C-3 | Lengths: `Track.Name` ≤ 150, `Track.Description` ≤ 1000, `Module.Title` ≤ 150, `Module.Summary` ≤ 500, `Lesson.Title` ≤ 150. Oversize input is rejected at both the validator (`400`) and the database boundary. | Implemented (DB); validator coverage/wiring target |
-| C-4 | Ordering is strict and contiguous: `UNIQUE(TrackId, Order)` for Modules, `UNIQUE(ModuleId, Order)` for Lessons; `Order ≥ 1`; surviving siblings are re-sequenced to `1, 2, 3, …` in the same `UnitOfWork` transaction on insert/move/delete. | Unique indexes implemented; re-sequencing target (#12) |
+| C-4 | Ordering is strict and contiguous: `UNIQUE(TrackId, Order)` for Modules, `UNIQUE(ModuleId, Order)` for Lessons; `Order ≥ 1`; surviving siblings are re-sequenced to `1, 2, 3, …` in the same `UnitOfWork` transaction on insert/move/delete. | Unique indexes implemented; re-sequencing target (Decision 12) |
 | C-5 | Reordering a `Published` Track after learners started requires product approval. Progress rows are keyed by `ModuleId`, never by `Order`, so renames of positions never orphan history. | Target |
 | C-6 | Deletes never cascade learner data: `Track` with Modules/enrollments/progress, `Module` with Lessons/Exam/progress, `Lesson` with resources are blocked with `409 Conflict`. FKs use `DeleteBehavior.Restrict` (configured for Module→Track, Lesson→Module, Exam→Module, UserProgress→User/Module, TrackEnrollment→User/Track, LessonResource→Lesson). | Implemented (Restrict FKs, 409 via `UnitOfWork`) |
-| C-7 | `LessonType` (`Text`, `Video`, `Exercise`) exists as an enum but is **not** a `Lesson` property today. Until decision #13 lands, content kind must not be inferred from anywhere else. | Implemented (as absence) |
+| C-7 | `LessonType` (`Text`, `Video`, `Exercise`) exists as an enum but is **not** a `Lesson` property today. Until Decision 13 lands, content kind must not be inferred from anywhere else. | Implemented (as absence) |
 
 ## 4. Enrollment
 
@@ -83,16 +88,47 @@ Boundary notes: empty string passes `NOT NULL` in SQLite — hence the `CK_Users
 | ID | Rule | Status |
 |---|---|---|
 | P-1 | Exactly one `UserProgress` row per (`UserId`, `ModuleId`), enforced by unique index. | Implemented |
-| P-2 | Unlock is forward-only and sticky: a pass unlocks **only** the next Module in the same Track; a fail unlocks nothing; an unlocked Module is never auto re-locked; the final Module unlocks nothing. | Target (submit behavior) |
-| P-3 | An `Admin` may manually unlock any Module for a learner (row created if missing, `Score`/`PassedExam` untouched) as an auditable support action. | Target |
+| P-2 | Unlock is forward-only, sticky, and **dual-gated**: a Module unlocks its successor only when **both** hold: the Module exam is passed (if Module has an exam) AND every problem marked `IsRequired` is completed (if Module has problems). A Module with only one uses only that one. A Module with neither uses explicit admin unlock. Optional problems never block. Both flags are sticky. The unlock check runs after BOTH events inside one `UnitOfWork` transaction. | Target (D-E) |
+| P-3 | An `Admin` may manually unlock any Module for a learner (row created if missing, `Score`/`PassedExam`/`CompletedRequiredProblems` untouched) as an auditable support action. | Target |
 | P-4 | Locked content returns `403 Forbidden` (exists but not allowed), never `404`. One learner never sees or changes another's progress (`403` on cross-access). | Target (API) |
-| P-5 | Track completion is derived, not stored: all Modules `PassedExam = true` (exam-less Modules via explicit unlock). No completion record exists in the MVP. | Target |
+| P-5 | Track completion is derived automatically, not stored: all Modules in the Track have `PassedExam = true` and `CompletedRequiredProblems = true`, plus all capstone `ProjectMilestone`s verified. No completion record exists in the MVP. | Target (D-G) |
 
-## 7. Invariants enforcement map
+## 7. Public Resource Hub
+
+| ID | Rule | Status |
+|---|---|---|
+| R-1 | Read access to the Resource Hub is 100% public and anonymous; no authentication or bearer token is accepted or required for browsing and search. | Target |
+| R-2 | The taxonomy follows a strict 3-click maximum hierarchy: Language $\to$ Framework/Technology $\to$ Topic $\to$ Resources. Nodes are modeled as self-referencing `Technology` trees. | Target |
+| R-3 | Resources must have a non-blank `Title` (max 200), ISO language code, difficulty `Level`, `Kind`, and cost flag (`IsPaid`). At least one of `Url` (absolute `http`/`https`) or `Citation` (max 500) must be present. | Target |
+| R-4 | Public anonymous queries only return resources with `Status = Approved`. Resources created by admin default to `Approved`; future community submissions start `PendingApproval`. | Target |
+| R-5 | Lesson resources and Hub resources share one underlying `Resource` entity. `LessonResource` is a join entity (`LessonId`, `ResourceId`, `Order`, `Note`), migrated in a two-step non-destructive sequence. | Target (D-H) |
+| R-6 | Scheduled background link checker probes URLs periodically; marks `Status = ResourceStatus.Broken` after 3 consecutive failures, hiding from public lists until repaired. | Target (D-H) |
+
+## 8. External practice problems & automated verification
+
+| ID | Rule | Status |
+|---|---|---|
+| X-1 | Practice problems support `ProblemKind`: `CodeforcesProblem` (algorithmic fundamentals) and `GitHubTask` (practical framework tasks), verified 100% automatically via `IProblemVerifier`. | Target (D-A) |
+| X-2 | Codeforces handle ownership is verified via a 128-bit single-use token placed into profile field (`firstName` or `organization`) returned by public `user.info`. Verified handle is unique per user (`UNIQUE(Platform, Handle)`). | Target (D-B) |
+| X-3 | Codeforces solve verification queries public `user.status` for `verdict == OK`, matching `contestId` and problem `index`. All-time accepted solves count. Solves are never self-reported. Cooldown is 60s per user. | Target (D-C) |
+| X-4 | Automated GitHub tasks (CodeCrafters-style): learner links GitHub via OAuth (numeric ID stored), generates repo from official template, pushes to default branch. Platform verifies repo owner, template provenance, Actions workflow success, and blob/tree SHAs against `TaskVersion`. Zero manual gating. | Target (D-D) |
+| X-5 | Problem difficulty calibration: `ModuleProblem` caches Codeforces rating. First Module problems must be rated $\le 800$, rising gradually. Content guideline and soft validator warning. | Target (D-F) |
+| X-6 | External service outages (Codeforces or GitHub down/throttled) return a fail-safe 503 response and alter NO learner state. | Target (D-J) |
+
+## 9. Cumulative capstone projects
+
+| ID | Rule | Status |
+|---|---|---|
+| J-1 | A Track concludes with a single cumulative portfolio project built progressively across ordered `ProjectMilestone`s. | Target (D-G) |
+| J-2 | Each milestone references a `GitHubTask` and is verified by the exact same automated GitHub task pipeline (CodeCrafters-style). Zero manual gating. | Target (D-G) |
+| J-3 | Track completion is derived automatically when all Track Modules are passed and all Capstone Milestones are verified. Supplementary peer or mentor feedback is optional and non-blocking. | Target (D-G) |
+
+## 10. Invariants enforcement map
 
 | Invariant | Database | Application |
 |---|---|---|
 | One progress row per learner+Module | `UNIQUE(UserId, ModuleId)` ✅ | Upsert, never duplicate-insert |
+| Dual-gated module unlock | — | Next module unlocked only if exam passed AND required problems completed |
 | One exam per Module | `UNIQUE(ModuleId)` ✅ | Duplicate create → `409` (target) |
 | Case-insensitive unique email | `UNIQUE(Email)` + `NOCASE` ✅ | Identical normalization in register/login (target) |
 | Non-blank identity fields | `CK_Users_*_NotEmpty` ✅ | Register validator → `400` (target) |
@@ -100,5 +136,8 @@ Boundary notes: empty string passes `NOT NULL` in SQLite — hence the `CK_Users
 | Contiguous sibling order | Unique `(parent, Order)` ✅ | Shift/re-sequence in one transaction (target) |
 | Length bounds | `HasMaxLength` ✅ | Module/Lesson validators; Track validator gaps → `400` (partial) |
 | Server-side grading | — | Submit path ignores client score |
+| Verified handle challenge | `UNIQUE(Platform, Handle)` | Token verification via Codeforces `user.info` profile check |
+| Automated task integrity | — | GitHub Actions success AND blob/tree SHA integrity matches |
+| Anonymous Hub access | — | Public read endpoints bypass authorization filter |
 
 ✅ Implemented · ⏳ Target (decided, scheduled)

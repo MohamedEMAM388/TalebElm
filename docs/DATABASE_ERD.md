@@ -106,3 +106,225 @@ All learning-path foreign keys use `DeleteBehavior.Restrict`. There is no soft d
 | `Lesson` | Blocked (`409`) while learner-facing linkage depends on it (resources, progress views). After deletion, re-sequence surviving Lessons in the Module contiguously in the same transaction. |
 | `Exam` | Deleting an Exam is allowed only when no grading depends on it; it never deletes the parent Module or learner `UserProgress` rows. |
 | `User` | Learner history is preserved: never cascade-delete `TrackEnrollment` / `UserProgress` rows when a user is removed. Account removal follows the auth/identity retention policy. |
+
+---
+
+## 6. Proposed Target Architecture ERD (Three Pillars)
+
+> **Status discipline:** This section is **Proposed / Target**. Entities below expand the current domain to support the three product pillars (Resource Hub, verified problems, and capstone projects). Current entities in §1 remain untouched until corresponding migrations land.
+
+```mermaid
+erDiagram
+    USER ||--o{ TRACK_ENROLLMENT : "enrolls in"
+    USER ||--o{ USER_PROGRESS : "has progress"
+    USER ||--o{ USER_EXTERNAL_ACCOUNT : "links"
+    USER ||--o{ USER_PROBLEM_COMPLETION : "completes"
+    USER ||--o{ USER_MILESTONE_PROGRESS : "tracks milestone"
+
+    TRACK ||--o{ MODULE : "contains"
+    TRACK ||--o{ TRACK_ENROLLMENT : "enrolled by"
+    TRACK ||--o| CAPSTONE_PROJECT : "concludes with"
+
+    MODULE ||--o{ LESSON : "contains"
+    MODULE ||--o| EXAM : "has assessment"
+    MODULE ||--o{ MODULE_PROBLEM : "assigns"
+    MODULE ||--o{ USER_PROGRESS : "tracked in"
+
+    LESSON ||--o{ LESSON_RESOURCE : "cites via (join entity)"
+    RESOURCE ||--o{ LESSON_RESOURCE : "referenced in"
+
+    EXAM ||--o{ EXAM_QUESTION : "contains"
+    EXAM_QUESTION ||--o{ EXAM_OPTION : "offers"
+
+    TECHNOLOGY ||--o{ TECHNOLOGY : "parent of (tree)"
+    TECHNOLOGY ||--o{ RESOURCE : "indexes"
+
+    MODULE_PROBLEM ||--o{ USER_PROBLEM_COMPLETION : "verified in"
+    MODULE_PROBLEM }o--o| GITHUB_TASK : "links to (if GitHubTask)"
+
+    GITHUB_TASK ||--o{ TASK_VERSION : "versioned by"
+    GITHUB_TASK ||--o{ PROJECT_MILESTONE : "verifies"
+
+    CAPSTONE_PROJECT ||--o{ PROJECT_MILESTONE : "defines"
+    PROJECT_MILESTONE ||--o{ USER_MILESTONE_PROGRESS : "tracks"
+
+    USER {
+        Guid Id PK
+        string Name
+        string Email
+        string PasswordHash
+        int Role
+        DateTime JoinedAt
+    }
+
+    TRACK {
+        Guid Id PK
+        string Name
+        string Description
+        int Status
+    }
+
+    MODULE {
+        Guid Id PK
+        Guid TrackId FK
+        string Title
+        string Summary
+        int Order
+    }
+
+    LESSON {
+        Guid Id PK
+        Guid ModuleId FK
+        string Title
+        string Content
+        int Order
+    }
+
+    EXAM {
+        Guid Id PK
+        Guid ModuleId FK
+        string Title
+        int PassThreshold
+    }
+
+    EXAM_QUESTION {
+        Guid Id PK
+        Guid ExamId FK
+        string Prompt
+        int Points
+        int Order
+    }
+
+    EXAM_OPTION {
+        Guid Id PK
+        Guid ExamQuestionId FK
+        string Text
+        bool IsCorrect
+    }
+
+    USER_PROGRESS {
+        Guid Id PK
+        Guid UserId FK
+        Guid ModuleId FK
+        bool IsUnlocked
+        bool PassedExam
+        bool CompletedRequiredProblems
+        int Score
+    }
+
+    USER_EXTERNAL_ACCOUNT {
+        Guid Id PK
+        Guid UserId FK
+        int Platform
+        string Handle
+        long ExternalUserId "nullable, numeric GitHub ID"
+        int VerificationStatus
+        string VerificationChallengeToken "nullable, 128-bit"
+        DateTimeOffset ChallengeExpiresAt "nullable"
+        DateTimeOffset VerifiedAt "nullable"
+    }
+
+    MODULE_PROBLEM {
+        Guid Id PK
+        Guid ModuleId FK
+        int Kind "ProblemKind: Codeforces=1, GitHubTask=2"
+        string ExternalId "nullable, e.g. 4A"
+        int DifficultyRating "nullable, cached"
+        Guid GitHubTaskId FK "nullable"
+        string Title
+        string Url
+        int Order
+        bool IsRequired
+    }
+
+    GITHUB_TASK {
+        Guid Id PK
+        string Title
+        string Description
+        string TemplateRepoFullName
+        Guid CurrentVersionId FK
+    }
+
+    TASK_VERSION {
+        Guid Id PK
+        Guid TaskId FK
+        int VersionNumber
+        string OfficialCommitSha
+        string WorkflowBlobSha
+        string TestsTreeSha
+        bool IsActive
+    }
+
+    USER_PROBLEM_COMPLETION {
+        Guid Id PK
+        Guid UserId FK
+        Guid ModuleProblemId FK
+        DateTimeOffset CompletedAt
+        string ExternalSubmissionId "nullable"
+        string VerifiedHeadCommitSha "nullable"
+        Guid TaskVersionId FK "nullable"
+    }
+
+    TECHNOLOGY {
+        Guid Id PK
+        Guid ParentId FK "nullable"
+        string Name
+        string Slug
+        string Description "nullable"
+        int Kind
+        int Order
+    }
+
+    RESOURCE {
+        Guid Id PK
+        Guid TechnologyId FK "nullable"
+        string Title
+        int Kind
+        string Url "nullable"
+        string Citation "nullable"
+        string Language
+        int Level
+        bool IsPaid
+        int Status
+        int ConsecutiveFailureCount
+        DateTimeOffset LastCheckedAt "nullable"
+        Guid CreatedByUserId FK "nullable"
+    }
+
+    LESSON_RESOURCE {
+        Guid Id PK
+        Guid LessonId FK
+        Guid ResourceId FK
+        int Order
+        string Note "nullable"
+    }
+
+    CAPSTONE_PROJECT {
+        Guid Id PK
+        Guid TrackId FK
+        string Title
+        string Description
+        string StarterTemplateRepo
+    }
+
+    PROJECT_MILESTONE {
+        Guid Id PK
+        Guid ProjectId FK
+        Guid TaskId FK
+        Guid ModuleId FK "nullable"
+        string Title
+        string Instructions
+        int Order
+    }
+
+    USER_MILESTONE_PROGRESS {
+        Guid Id PK
+        Guid UserId FK
+        Guid MilestoneId FK
+        bool IsCompleted
+        DateTimeOffset CompletedAt "nullable"
+        string RepositoryUrl "nullable"
+        string HeadCommitSha "nullable"
+    }
+```
+
